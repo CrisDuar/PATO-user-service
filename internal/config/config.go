@@ -2,13 +2,14 @@ package config
 
 import (
 	"fmt"
-	"os"
 	"github.com/joho/godotenv"
+	"os"
 )
 
 type Config struct {
-	Database DatabaseConfig
-	Server   ServerConfig
+	Database     DatabaseConfig
+	Server       ServerConfig
+	EmailService EmailServiceConfig
 }
 
 type DatabaseConfig struct {
@@ -24,6 +25,11 @@ type ServerConfig struct {
 	Port        string
 	Environment string
 	Name        string
+}
+
+type EmailServiceConfig struct {
+	BaseURL    string
+	AppBaseURL string
 }
 
 func Load() (*Config, error) {
@@ -42,6 +48,10 @@ func Load() (*Config, error) {
 			Port:        getEnv("APP_PORT", "8080"),
 			Environment: getEnv("APP_ENV", "development"),
 			Name:        getEnv("APP_NAME", "PATO User Service"),
+		},
+		EmailService: EmailServiceConfig{
+			BaseURL:    getEnv("EMAIL_SERVICE_URL", "http://localhost:8000"),
+			AppBaseURL: getEnv("APP_BASE_URL", "http://localhost:3000"),
 		},
 	}
 

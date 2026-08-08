@@ -24,6 +24,14 @@ type ErrorResponse struct {
 	Description string `json:"description,omitempty"`
 }
 
+type VerifyEmailRequest struct {
+	Token string `json:"token" validate:"required"`
+}
+
 func (r *UserCreateRequest) Validate() error {
+	return validate.Struct(r)
+}
+
+func (r *VerifyEmailRequest) Validate() error {
 	return validate.Struct(r)
 }

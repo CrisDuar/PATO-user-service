@@ -23,7 +23,8 @@ func main() {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 
-	userService := services.NewUserService(db, cfg)
+	emailService := services.NewEmailService(cfg.EmailService.BaseURL)
+	userService := services.NewUserService(db, cfg, emailService)
 	usersHandler := handlers.NewUsersHandler(userService)
 
 	router := gin.Default()
@@ -40,6 +41,7 @@ func main() {
 		users := v1.Group("/users")
 		{
 			users.POST("/register", usersHandler.Register)
+			users.POST("/verify-email", usersHandler.VerifyEmail)
 		}
 	}
 

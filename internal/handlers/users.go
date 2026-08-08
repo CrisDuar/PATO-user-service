@@ -54,3 +54,35 @@ func (h *UsersHandler) Register(c *gin.Context) {
 		CreatedAt: user.CreatedAt.Format("2006-01-02T15:04:05Z"),
 	})
 }
+
+func (h *UsersHandler) VerifyEmail(c *gin.Context) {
+	var req dto.VerifyEmailRequest
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
+			Error:       "Invalid request format",
+			Code:        "INVALID_REQUEST",
+			Description: err.Error(),
+		})
+		return
+	}
+
+	if err := req.Validate(); err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
+			Error:       "Validation failed",
+			Code:        "VALIDATION_ERROR",
+			Description: err.Error(),
+		})
+		return
+	}
+
+	if err := h.userService.VerifyEmail(req.Token); err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
+			Error: err.Error(),
+			Code:  "EMAIL_VERIFICATION_FAILED",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Email verified successfully"})
+}
