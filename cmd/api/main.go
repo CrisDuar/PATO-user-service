@@ -42,6 +42,7 @@ func main() {
 		{
 			users.POST("/register", usersHandler.Register)
 			users.POST("/verify-email", usersHandler.VerifyEmail)
+			users.POST("/login", usersHandler.Login)
 		}
 	}
 

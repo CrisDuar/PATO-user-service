@@ -18,6 +18,16 @@ type UserResponse struct {
 	CreatedAt string `json:"created_at"`
 }
 
+type LoginRequest struct {
+	Email    string `json:"email" validate:"required,email"`
+	Password string `json:"password" validate:"required"`
+}
+
+type LoginResponse struct {
+	Token string       `json:"token"`
+	User  UserResponse `json:"user"`
+}
+
 type ErrorResponse struct {
 	Error       string `json:"error"`
 	Code        string `json:"code"`
@@ -29,6 +39,10 @@ type VerifyEmailRequest struct {
 }
 
 func (r *UserCreateRequest) Validate() error {
+	return validate.Struct(r)
+}
+
+func (r *LoginRequest) Validate() error {
 	return validate.Struct(r)
 }
 

@@ -110,3 +110,32 @@ func (s *UserService) VerifyEmail(token string) error {
 		return nil
 	})
 }
+
+func (s *UserService) Login(req *dto.LoginRequest) (string, *models.User, error) {
+	var user models.User
+
+	if err := s.DB.Where("email = ?", req.Email).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", nil, fmt.Errorf("invalid email or password")
+		}
+
+		return "", nil, fmt.Errorf("database error: %w", err)
+	}
+
+	if !utils.VerifyPassword(user.PasswordHash, req.Password) {
+		return "", nil, fmt.Errorf("invalid emaill oor password")
+	}
+
+	if !user.EmailVerified {
+		return "", nil, fmt.Errorf("email not verified")
+	}
+
+	token, err := utils.GenerateJWT(&user, s.Config.JWT)
+
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to generate token: %w", err)
+	}
+
+	return token, &user, nil
+
+}

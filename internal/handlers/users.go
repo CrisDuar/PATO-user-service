@@ -86,3 +86,42 @@ func (h *UsersHandler) VerifyEmail(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"message": "Email verified successfully"})
 }
+
+func (h *UsersHandler) Login(c *gin.Context) {
+	var req dto.LoginRequest
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
+			Error:       "Invalid request format",
+			Code:        "INVALID_REQUEST",
+			Description: err.Error(),
+		})
+		return
+	}
+	if err := req.Validate(); err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
+			Error:       "Validation failed",
+			Code:        "VALIDATION_ERROR",
+			Description: err.Error(),
+		})
+		return
+	}
+	token, user, err := h.userService.Login(&req)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{
+			Error: err.Error(),
+			Code:  "LOGIN_FAILED",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, dto.LoginResponse{
+		Token: token,
+		User: dto.UserResponse{
+			ID:        user.ID.String(),
+			Username:  user.Username,
+			Email:     user.Email,
+			CreatedAt: user.CreatedAt.Format("2006-01-02T15:04:05z"),
+		},
+	})
+}

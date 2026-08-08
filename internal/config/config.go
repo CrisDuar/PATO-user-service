@@ -2,16 +2,23 @@ package config
 
 import (
 	"fmt"
-	"github.com/joho/godotenv"
 	"os"
+	"time"
+
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
 	Database     DatabaseConfig
 	Server       ServerConfig
 	EmailService EmailServiceConfig
+	JWT          JWTConfig
 }
 
+type JWTConfig struct {
+	Secret     string
+	Expiration time.Duration
+}
 type DatabaseConfig struct {
 	Host     string
 	Port     string
@@ -52,6 +59,10 @@ func Load() (*Config, error) {
 		EmailService: EmailServiceConfig{
 			BaseURL:    getEnv("EMAIL_SERVICE_URL", "http://localhost:8000"),
 			AppBaseURL: getEnv("APP_BASE_URL", "http://localhost:3000"),
+		},
+		JWT: JWTConfig{
+			Secret:     getEnv("JWT_SECRET", ""),
+			Expiration: 30 * 24 * time.Hour,
 		},
 	}
 
