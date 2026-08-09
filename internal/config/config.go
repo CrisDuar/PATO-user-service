@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -10,6 +11,7 @@ import (
 
 type Config struct {
 	Database     DatabaseConfig
+	Redis        RedisConfig
 	Server       ServerConfig
 	EmailService EmailServiceConfig
 	JWT          JWTConfig
@@ -26,6 +28,13 @@ type DatabaseConfig struct {
 	Password string
 	DBName   string
 	SSLMode  string
+}
+
+type RedisConfig struct {
+	Addr     string
+	Username string
+	Password string
+	DB       int
 }
 
 type ServerConfig struct {
@@ -51,6 +60,12 @@ func Load() (*Config, error) {
 			DBName:   getEnv("APP_DB_NAME", "pato_db"),
 			SSLMode:  getEnv("APP_DB_SSL_MODE", "disable"),
 		},
+		Redis: RedisConfig{
+			Addr:     getEnv("APP_REDIS_ADDR", "localhost:6379"),
+			Username: getEnv("APP_REDIS_USER", ""),
+			Password: getEnv("APP_REDIS_PASSWORD", ""),
+			DB:       getEnvInt("APP_REDIS_DB", 0),
+		},
 		Server: ServerConfig{
 			Port:        getEnv("APP_PORT", "8080"),
 			Environment: getEnv("APP_ENV", "development"),
@@ -72,6 +87,15 @@ func Load() (*Config, error) {
 func getEnv(key, defaultValue string) string {
 	if value, exists := os.LookupEnv(key); exists {
 		return value
+	}
+	return defaultValue
+}
+
+func getEnvInt(key string, defaultValue int) int {
+	if value, exists := os.LookupEnv(key); exists {
+		if parsed, err := strconv.Atoi(value); err == nil {
+			return parsed
+		}
 	}
 	return defaultValue
 }

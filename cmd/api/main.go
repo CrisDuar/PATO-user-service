@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 
@@ -23,6 +24,11 @@ func main() {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 
+	redisClient, err := database.ConnectRedis(cfg)
+	if err != nil {
+		log.Fatalf("Failed to connect to redis: %v", err)
+	}
+
 	emailService := services.NewEmailService(cfg.EmailService.BaseURL)
 	userService := services.NewUserService(db, cfg, emailService)
 	usersHandler := handlers.NewUsersHandler(userService)
@@ -30,9 +36,15 @@ func main() {
 	router := gin.Default()
 
 	router.GET("/health", func(c *gin.Context) {
+		redisStatus := "healthy"
+		if err := redisClient.Ping(context.Background()).Err(); err != nil {
+			redisStatus = "unhealthy"
+		}
+
 		c.JSON(200, gin.H{
 			"status": "healthy",
 			"app":    cfg.Server.Name,
+			"redis":  redisStatus,
 		})
 	})
 

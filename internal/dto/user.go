@@ -38,6 +38,17 @@ type VerifyEmailRequest struct {
 	Token string `json:"token" validate:"required"`
 }
 
+type UpdateUserRequest struct {
+	Username string `json:"username" validate:"required,min=2,max=50"`
+	Email    string `json:"email" validate:"required,email"`
+}
+
+type ChangePasswordRequest struct {
+	CurrentPassword    string `json:"current_password" validate:"required"`
+	NewPassword        string `json:"new_password" validate:"required,min=8"`
+	ConfirmNewPassword string `json:"confirm_new_password" validate:"required,eqfield=NewPassword"`
+}
+
 func (r *UserCreateRequest) Validate() error {
 	return validate.Struct(r)
 }
@@ -47,5 +58,13 @@ func (r *LoginRequest) Validate() error {
 }
 
 func (r *VerifyEmailRequest) Validate() error {
+	return validate.Struct(r)
+}
+
+func (r *UpdateUserRequest) Validate() error {
+	return validate.Struct(r)
+}
+
+func (r *ChangePasswordRequest) Validate() error {
 	return validate.Struct(r)
 }
