@@ -125,3 +125,40 @@ func (h *UsersHandler) Login(c *gin.Context) {
 		},
 	})
 }
+
+func (h *UsersHandler) Me(c *gin.Context) {
+	userID, exists := c.Get("userID")
+
+	if !exists {
+		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{
+			Error: "User not authenticated",
+			Code:  "UNAUTHORIZED",
+		})
+		return
+	}
+
+	userIDString, ok := userID.(string)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{
+			Error: "Invalid user information",
+			Code:  "UNAUTHORIZED",
+		})
+		return
+	}
+
+	user, err := h.userService.GetUserByID(userIDString)
+	if err != nil {
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{
+			Error: err.Error(),
+			Code:  "USER_NOT_FOUND",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, dto.UserResponse{
+		ID:        user.ID.String(),
+		Username:  user.Username,
+		Email:     user.Email,
+		CreatedAt: user.CreatedAt.Format("2006-01-02T15:04:05Z"),
+	})
+}

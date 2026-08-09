@@ -20,7 +20,8 @@ func GenerateJWT(user *models.User, cfg config.JWTConfig) (string, error) {
 		"exp":      now.Add(cfg.Expiration).Unix(),
 	}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+
 	signedToken, err := token.SignedString([]byte(cfg.Secret))
 	if err != nil {
 		return "", fmt.Errorf("failed to sign JWT: %w", err)

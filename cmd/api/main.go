@@ -8,6 +8,7 @@ import (
 	"backend/internal/config"
 	"backend/internal/database"
 	"backend/internal/handlers"
+	"backend/internal/middleware"
 	"backend/internal/services"
 
 	"github.com/gin-gonic/gin"
@@ -55,6 +56,12 @@ func main() {
 			users.POST("/register", usersHandler.Register)
 			users.POST("/verify-email", usersHandler.VerifyEmail)
 			users.POST("/login", usersHandler.Login)
+
+			protected := users.Group("")
+			protected.Use(middleware.AuthMiddleware(cfg))
+			{
+				protected.GET("/me", usersHandler.Me)
+			}
 		}
 	}
 

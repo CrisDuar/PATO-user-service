@@ -12,6 +12,7 @@ import (
 	"backend/internal/models"
 	"backend/internal/utils"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -138,4 +139,23 @@ func (s *UserService) Login(req *dto.LoginRequest) (string, *models.User, error)
 
 	return token, &user, nil
 
+}
+
+func (s *UserService) GetUserByID(id string) (*models.User, error) {
+	userID, err := uuid.Parse(id)
+	if err != nil {
+		return nil, fmt.Errorf("invalid user id")
+	}
+
+	var user models.User
+
+	if err := s.DB.First(&user, "id = ?", userID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("user not found")
+		}
+
+		return nil, fmt.Errorf("database error: %w", err)
+	}
+
+	return &user, nil
 }
