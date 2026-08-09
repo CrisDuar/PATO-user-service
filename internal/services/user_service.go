@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -11,19 +12,25 @@ import (
 	"backend/internal/models"
 	"backend/internal/utils"
 
+	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
 const emailVerificationTokenTTL = 15 * time.Minute
 
+func verificationCodeKey(email string) string {
+	return fmt.Sprintf("pato:email-verification:%s", email)
+}
+
 type UserService struct {
 	DB           *gorm.DB
 	Config       *config.Config
 	EmailService *EmailService
+	Valkey       *redis.Client
 }
 
-func NewUserService(db *gorm.DB, cfg *config.Config, emailService *EmailService) *UserService {
-	return &UserService{DB: db, Config: cfg, EmailService: emailService}
+func NewUserService(db *gorm.DB, cfg *config.Config, emailService *EmailService, valkey *redis.Client) *UserService {
+	return &UserService{DB: db, Config: cfg, EmailService: emailService, Valkey: valkey}
 }
 
 func (s *UserService) CreateUser(req *dto.UserCreateRequest) (*models.User, error) {
@@ -59,56 +66,49 @@ func (s *UserService) CreateUser(req *dto.UserCreateRequest) (*models.User, erro
 }
 
 func (s *UserService) issueVerificationEmail(user *models.User) {
-	token, err := utils.GenerateVerificationToken()
+	code, err := utils.GenerateNumericCode()
 	if err != nil {
-		log.Printf("failed to generate verification token for %s: %v", user.Email, err)
+		log.Printf("failed to generate verification code for %s: %v", user.Email, err)
 		return
 	}
 
-	verificationToken := &models.EmailVerificationToken{
-		UserID:    user.ID,
-		TokenHash: utils.HashToken(token),
-		ExpiresAt: time.Now().Add(emailVerificationTokenTTL),
-	}
-
-	if err := s.DB.Create(verificationToken).Error; err != nil {
+	ctx := context.Background()
+	if err := s.Valkey.Set(ctx, verificationCodeKey(user.Email), code, emailVerificationTokenTTL).Err(); err != nil {
 		log.Printf("failed to store verification token for %s: %v", user.Email, err)
 		return
 	}
 
-	verifyLink := fmt.Sprintf("%s/verify-email?token=%s", s.Config.EmailService.AppBaseURL, token)
-	if err := s.EmailService.SendVerificationEmail(user.Username, user.Email, verifyLink); err != nil {
+	if err := s.EmailService.SendVerificationEmail(user.Username, user.Email, code); err != nil {
 		log.Printf("failed to send verification email to %s: %v", user.Email, err)
 	}
 }
 
-func (s *UserService) VerifyEmail(token string) error {
-	tokenHash := utils.HashToken(token)
+func (s *UserService) VerifyEmail(email, token string) error {
+	ctx := context.Background()
+	key := verificationCodeKey(email)
 
-	var verificationToken models.EmailVerificationToken
-	if err := s.DB.Where("token_hash = ? AND used = ?", tokenHash, false).First(&verificationToken).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return fmt.Errorf("invalid or already used token")
+	storedCode, err := s.Valkey.Get(ctx, key).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return fmt.Errorf("invalid or expired token")
 		}
-		return fmt.Errorf("database error: %w", err)
+		return fmt.Errorf("valkey error: %w", err)
 	}
 
-	if time.Now().After(verificationToken.ExpiresAt) {
-		return fmt.Errorf("token expired")
+	if storedCode != token {
+		return fmt.Errorf("invalid or expired token")
 	}
 
-	return s.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&models.User{}).Where("id = ?", verificationToken.UserID).
-			Update("email_verified", true).Error; err != nil {
-			return fmt.Errorf("failed to mark email as verified: %w", err)
-		}
+	if err := s.DB.Model(&models.User{}).Where("email = ?", email).
+		Update("email_verified", true).Error; err != nil {
+		return fmt.Errorf("failed to mark email as verified: %w", err)
+	}
 
-		if err := tx.Model(&verificationToken).Update("used", true).Error; err != nil {
-			return fmt.Errorf("failed to invalidate token: %w", err)
-		}
+	if err := s.Valkey.Del(ctx, key).Err(); err != nil {
+		log.Printf("failed to delete used verification token for %s: %v", email, err)
+	}
 
-		return nil
-	})
+	return nil
 }
 
 func (s *UserService) Login(req *dto.LoginRequest) (string, *models.User, error) {

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 	"regexp"
 
 	"golang.org/x/crypto/bcrypt"
@@ -55,4 +56,12 @@ func GenerateVerificationToken() (string, error) {
 func HashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
+}
+
+func GenerateNumericCode() (string, error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	if err != nil {
+		return "", fmt.Errorf("failed to generate code: %w", err)
+	}
+	return fmt.Sprintf("%06d", n.Int64()), nil
 }

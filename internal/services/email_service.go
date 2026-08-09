@@ -23,19 +23,19 @@ func NewEmailService(baseURL string) *EmailService {
 	}
 }
 
-type sendEmailVerificationRequest struct {
+type sendEmailTokenRequest struct {
 	User         string `json:"user"`
+	Token        string `json:"token"`
 	Minutos      string `json:"minutos"`
 	Destinatario string `json:"destinatario"`
-	Link         string `json:"link"`
 }
 
-func (s *EmailService) SendVerificationEmail(username, email, verifyLink string) error {
-	payload := sendEmailVerificationRequest{
+func (s *EmailService) SendVerificationEmail(username, email, token string) error {
+	payload := sendEmailTokenRequest{
 		User:         username,
+		Token:        token,
 		Minutos:      "15",
 		Destinatario: email,
-		Link:         verifyLink,
 	}
 
 	body, err := json.Marshal(payload)
@@ -61,7 +61,7 @@ func (s *EmailService) SendVerificationEmail(username, email, verifyLink string)
 }
 
 func (s *EmailService) send(body []byte) error {
-	req, err := http.NewRequest(http.MethodPost, s.baseURL+"/api/sendEmailVerification", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, s.baseURL+"/api/sendEmailToken", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("failed to build request: %w", err)
 	}

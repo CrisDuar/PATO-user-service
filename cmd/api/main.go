@@ -24,27 +24,27 @@ func main() {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 
-	redisClient, err := database.ConnectRedis(cfg)
+	valkeyClient, err := database.ConnectValkey(cfg)
 	if err != nil {
-		log.Fatalf("Failed to connect to redis: %v", err)
+		log.Fatalf("Failed to connect to valkey: %v", err)
 	}
 
 	emailService := services.NewEmailService(cfg.EmailService.BaseURL)
-	userService := services.NewUserService(db, cfg, emailService)
+	userService := services.NewUserService(db, cfg, emailService, valkeyClient)
 	usersHandler := handlers.NewUsersHandler(userService)
 
 	router := gin.Default()
 
 	router.GET("/health", func(c *gin.Context) {
-		redisStatus := "healthy"
-		if err := redisClient.Ping(context.Background()).Err(); err != nil {
-			redisStatus = "unhealthy"
+		valkeyStatus := "healthy"
+		if err := valkeyClient.Ping(context.Background()).Err(); err != nil {
+			valkeyStatus = "unhealthy"
 		}
 
 		c.JSON(200, gin.H{
 			"status": "healthy",
 			"app":    cfg.Server.Name,
-			"redis":  redisStatus,
+			"valkey": valkeyStatus,
 		})
 	})
 

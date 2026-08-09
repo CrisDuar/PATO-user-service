@@ -76,7 +76,7 @@ func (h *UsersHandler) VerifyEmail(c *gin.Context) {
 		return
 	}
 
-	if err := h.userService.VerifyEmail(req.Token); err != nil {
+	if err := h.userService.VerifyEmail(req.Email, req.Token); err != nil {
 		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
 			Error: err.Error(),
 			Code:  "EMAIL_VERIFICATION_FAILED",

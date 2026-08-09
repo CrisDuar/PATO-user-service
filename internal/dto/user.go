@@ -35,6 +35,7 @@ type ErrorResponse struct {
 }
 
 type VerifyEmailRequest struct {
+	Email string `json:"email" validate:"required,email"`
 	Token string `json:"token" validate:"required"`
 }
 

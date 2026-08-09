@@ -11,7 +11,7 @@ import (
 
 type Config struct {
 	Database     DatabaseConfig
-	Redis        RedisConfig
+	Valkey       ValkeyConfig
 	Server       ServerConfig
 	EmailService EmailServiceConfig
 	JWT          JWTConfig
@@ -30,7 +30,7 @@ type DatabaseConfig struct {
 	SSLMode  string
 }
 
-type RedisConfig struct {
+type ValkeyConfig struct {
 	Addr     string
 	Username string
 	Password string
@@ -60,11 +60,11 @@ func Load() (*Config, error) {
 			DBName:   getEnv("APP_DB_NAME", "pato_db"),
 			SSLMode:  getEnv("APP_DB_SSL_MODE", "disable"),
 		},
-		Redis: RedisConfig{
-			Addr:     getEnv("APP_REDIS_ADDR", "localhost:6379"),
-			Username: getEnv("APP_REDIS_USER", ""),
-			Password: getEnv("APP_REDIS_PASSWORD", ""),
-			DB:       getEnvInt("APP_REDIS_DB", 0),
+		Valkey: ValkeyConfig{
+			Addr:     getEnv("APP_VALKEY_ADDR", "localhost:6379"),
+			Username: getEnv("APP_VALKEY_USER", ""),
+			Password: getEnv("APP_VALKEY_PASSWORD", ""),
+			DB:       getEnvInt("APP_VALKEY_DB", 0),
 		},
 		Server: ServerConfig{
 			Port:        getEnv("APP_PORT", "8080"),
