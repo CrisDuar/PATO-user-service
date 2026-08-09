@@ -2,10 +2,7 @@ package database
 
 import (
 	"fmt"
-
 	"backend/internal/config"
-	"backend/internal/models"
-
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -27,11 +24,4 @@ func Connect(cfg *config.Config) (*gorm.DB, error) {
 	}
 
 	return db, nil
-}
-
-func AutoMigrate(db *gorm.DB) error {
-	return db.AutoMigrate(
-		&models.User{},
-		&models.EmailVerificationToken{},
-	)
 }
