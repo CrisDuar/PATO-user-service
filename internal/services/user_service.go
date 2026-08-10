@@ -159,3 +159,72 @@ func (s *UserService) GetUserByID(id string) (*models.User, error) {
 
 	return &user, nil
 }
+
+func (s *UserService) UpdateEmail(userID uuid.UUID, req *dto.UpdateEmailRequest) (*models.User, error) {
+	var user models.User
+	if err := s.DB.Where("id = ?", userID).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("user not found")
+		}
+		return nil, fmt.Errorf("database error: %w", err)
+	}
+
+	if !utils.VerifyPassword(user.PasswordHash, req.Password) {
+		return nil, fmt.Errorf("invalid password")
+	}
+
+	if req.NewEmail == user.Email {
+		return nil, fmt.Errorf("new email must be different from current email")
+	}
+
+	var existingUser models.User
+	if err := s.DB.Where("email = ?", req.NewEmail).First(&existingUser).Error; err == nil {
+		return nil, fmt.Errorf("email already registered")
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("database error: %w", err)
+	}
+
+	user.Email = req.NewEmail
+	user.EmailVerified = false
+
+	if err := s.DB.Model(&user).Select("Email", "EmailVerified").Updates(user).Error; err != nil {
+		return nil, fmt.Errorf("failed to update email: %w", err)
+	}
+
+	s.issueVerificationEmail(&user)
+
+	return &user, nil
+}
+
+func (s *UserService) ChangePassword(userID uuid.UUID, req *dto.ChangePasswordRequest) error {
+	var user models.User
+	if err := s.DB.Where("id = ?", userID).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("user not found")
+		}
+		return fmt.Errorf("database error: %w", err)
+	}
+
+	if !utils.VerifyPassword(user.PasswordHash, req.CurrentPassword) {
+		return fmt.Errorf("invalid current password")
+	}
+
+	if err := utils.ValidatePassword(req.NewPassword); err != nil {
+		return err
+	}
+
+	if utils.VerifyPassword(user.PasswordHash, req.NewPassword) {
+		return fmt.Errorf("new password must be different from current password")
+	}
+
+	hashedPassword, err := utils.HashPassword(req.NewPassword)
+	if err != nil {
+		return err
+	}
+
+	if err := s.DB.Model(&user).Update("password_hash", hashedPassword).Error; err != nil {
+		return fmt.Errorf("failed to update password: %w", err)
+	}
+
+	return nil
+}

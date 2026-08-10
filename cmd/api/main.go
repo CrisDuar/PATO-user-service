@@ -61,6 +61,8 @@ func main() {
 			protected.Use(middleware.AuthMiddleware(cfg))
 			{
 				protected.GET("/me", usersHandler.Me)
+				protected.PATCH("/email", usersHandler.UpdateEmail)
+				protected.PATCH("/password", usersHandler.ChangePassword)
 			}
 		}
 	}
