@@ -228,3 +228,92 @@ func (s *UserService) ChangePassword(userID uuid.UUID, req *dto.ChangePasswordRe
 
 	return nil
 }
+
+const passwordResetTokenTTL = 15 * time.Minute
+
+func (s *UserService) ForgotPassword(email string) error {
+	var user models.User
+
+	if err := s.DB.Where("email = ?", email).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// No revelamos si el correo está registrado.
+			return nil
+		}
+
+		return fmt.Errorf("database error: %w", err)
+	}
+
+	token, err := utils.GenerateNumericCode()
+	if err != nil {
+		return fmt.Errorf("failed to generate reset token: %w", err)
+	}
+
+	tokenHash := utils.HashToken(token)
+
+	key := fmt.Sprintf("password_reset:%s", tokenHash)
+
+	err = s.Valkey.Set(
+		context.Background(),
+		key,
+		user.ID.String(),
+		passwordResetTokenTTL,
+	).Err()
+
+	if err != nil {
+		return fmt.Errorf("failed to store reset token: %w", err)
+	}
+
+	if err := s.EmailService.SendPasswordResetEmail(
+		user.Username,
+		user.Email,
+		token,
+	); err != nil {
+		return fmt.Errorf("failed to send password reset email: %w", err)
+	}
+
+	return nil
+}
+
+func (s *UserService) ResetPassword(req *dto.ResetPasswordRequest) error {
+	if err := utils.ValidatePassword(req.Password); err != nil {
+		return err
+	}
+
+	tokenHash := utils.HashToken(req.Token)
+
+	key := fmt.Sprintf("password_reset:%s", tokenHash)
+
+	userID, err := s.Valkey.Get(
+		context.Background(),
+		key,
+	).Result()
+
+	if err == redis.Nil {
+		return fmt.Errorf("invalid or expired token")
+	}
+
+	if err != nil {
+		return fmt.Errorf("failed to retrieve reset token: %w", err)
+	}
+
+	hashedPassword, err := utils.HashPassword(req.Password)
+	if err != nil {
+		return err
+	}
+
+	if err := s.DB.Model(&models.User{}).
+		Where("id = ?", userID).
+		Update("password_hash", hashedPassword).Error; err != nil {
+		return fmt.Errorf("failed to update password: %w", err)
+	}
+
+	// El token solo puede utilizarse una vez.
+	if err := s.Valkey.Del(
+		context.Background(),
+		key,
+	).Err(); err != nil {
+		return fmt.Errorf("failed to invalidate reset token: %w", err)
+	}
+
+	return nil
+}

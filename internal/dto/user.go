@@ -55,6 +55,24 @@ type ChangePasswordRequest struct {
 	ConfirmNewPassword string `json:"confirm_new_password" validate:"required,eqfield=NewPassword"`
 }
 
+type ForgotPasswordRequest struct {
+	Email string `json:"email" validate:"required,email"`
+}
+
+type ResetPasswordRequest struct {
+	Token           string `json:"token" validate:"required"`
+	Password        string `json:"password" validate:"required,min=8"`
+	ConfirmPassword string `json:"confirm_password" validate:"required,eqfield=Password"`
+}
+
+func (r *ForgotPasswordRequest) Validate() error {
+	return validate.Struct(r)
+}
+
+func (r *ResetPasswordRequest) Validate() error {
+	return validate.Struct(r)
+}
+
 func (r *UserCreateRequest) Validate() error {
 	return validate.Struct(r)
 }

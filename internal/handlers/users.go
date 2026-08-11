@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"time"
 
 	"backend/internal/dto"
 	"backend/internal/services"
@@ -266,4 +267,74 @@ func (h *UsersHandler) ChangePassword(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Password changed successfully"})
+}
+
+const passwordResetTokenTTL = 15 * time.Minute
+
+func (h *UsersHandler) ForgotPassword(c *gin.Context) {
+	var req dto.ForgotPasswordRequest
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
+			Error:       "Invalid request format",
+			Code:        "INVALID_REQUEST",
+			Description: err.Error(),
+		})
+		return
+	}
+
+	if err := req.Validate(); err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
+			Error:       "Validation failed",
+			Code:        "VALIDATION_ERROR",
+			Description: err.Error(),
+		})
+		return
+	}
+
+	if err := h.userService.ForgotPassword(req.Email); err != nil {
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{
+			Error: err.Error(),
+			Code:  "PASSWORD_RESET_FAILED",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "If the email is registered, a password reset token has been sent",
+	})
+}
+
+func (h *UsersHandler) ResetPassword(c *gin.Context) {
+	var req dto.ResetPasswordRequest
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
+			Error:       "Invalid request format",
+			Code:        "INVALID_REQUEST",
+			Description: err.Error(),
+		})
+		return
+	}
+
+	if err := req.Validate(); err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
+			Error:       "Validation failed",
+			Code:        "VALIDATION_ERROR",
+			Description: err.Error(),
+		})
+		return
+	}
+
+	if err := h.userService.ResetPassword(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
+			Error: err.Error(),
+			Code:  "PASSWORD_RESET_FAILED",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Password reset successfully",
+	})
 }
