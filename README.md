@@ -754,10 +754,199 @@ El flujo final de autenticación es:
 | `POST` | `/api/v1/users/verify-email` | Verificar correo              | No            |
 | `POST` | `/api/v1/users/login`        | Iniciar sesión y obtener JWT  | No            |
 | `GET`  | `/api/v1/users/me`           | Ejemplo de endpoint protegido | JWT           |
+| `PATCH` | `/api/v1/users/email`       | Cambiar el correo del usuario | JWT           |
+| `PATCH` | `/api/v1/users/password`    | Cambiar la contraseña del usuario | JWT       |
 
 ---
 
-# 24. Consideraciones de seguridad
+# 24. Cambio de correo electrónico
+
+Permite a un usuario autenticado actualizar su correo, confirmando su identidad con la contraseña actual.
+
+### Handler y ruta
+
+```go
+protected.PATCH("/email", usersHandler.UpdateEmail)
+```
+
+El endpoint completo es:
+
+```text
+PATCH /api/v1/users/email
+```
+
+Requiere autenticación:
+
+```http
+Authorization: Bearer <JWT>
+```
+
+### DTO
+
+```go
+type UpdateEmailRequest struct {
+    NewEmail string `json:"new_email" validate:"required,email"`
+    Password string `json:"password" validate:"required"`
+}
+```
+
+### Body
+
+```json
+{
+    "new_email": "nueva-natalia@gmail.com",
+    "password": "Password123!"
+}
+```
+
+### Flujo (`UserService.UpdateEmail`)
+
+```text
+PATCH /api/v1/users/email
+          │
+          ▼
+   AuthMiddleware (extrae userID del JWT)
+          │
+          ▼
+    UpdateEmailRequest
+          │
+          ▼
+   UserService.UpdateEmail()
+          │
+          ├── Buscar usuario por ID
+          │
+          ├── Verificar contraseña actual
+          │
+          ├── Rechazar si new_email == email actual
+          │
+          ├── Rechazar si new_email ya está registrado
+          │
+          ├── Actualizar email y marcar email_verified = false
+          │
+          └── Reenviar correo de verificación al nuevo email
+                    │
+                    ▼
+              Respuesta HTTP
+```
+
+Al cambiar el correo, la cuenta queda como **no verificada** nuevamente (`email_verified = false`), por lo que el usuario debe verificar el nuevo correo antes de poder volver a iniciar sesión, reutilizando el mismo mecanismo de verificación del registro (código numérico con TTL de 15 minutos).
+
+### Respuesta exitosa
+
+```json
+{
+    "id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    "username": "natalia",
+    "email": "nueva-natalia@gmail.com",
+    "created_at": "2026-08-08T..."
+}
+```
+
+### Posibles errores
+
+| Código HTTP | Code                  | Causa                                             |
+| ----------- | ---------------------- | -------------------------------------------------- |
+| 401         | `UNAUTHORIZED`          | Falta el JWT o es inválido                          |
+| 400         | `INVALID_REQUEST`       | JSON mal formado                                    |
+| 400         | `VALIDATION_ERROR`      | `new_email` no es un email válido o falta `password` |
+| 400         | `EMAIL_UPDATE_FAILED`   | Contraseña incorrecta, email igual al actual, o email ya registrado |
+
+---
+
+# 25. Cambio de contraseña
+
+Permite a un usuario autenticado cambiar su contraseña, validando la contraseña actual antes de aplicar la nueva.
+
+### Handler y ruta
+
+```go
+protected.PATCH("/password", usersHandler.ChangePassword)
+```
+
+El endpoint completo es:
+
+```text
+PATCH /api/v1/users/password
+```
+
+Requiere autenticación:
+
+```http
+Authorization: Bearer <JWT>
+```
+
+### DTO
+
+```go
+type ChangePasswordRequest struct {
+    CurrentPassword    string `json:"current_password" validate:"required"`
+    NewPassword        string `json:"new_password" validate:"required,min=8"`
+    ConfirmNewPassword string `json:"confirm_new_password" validate:"required,eqfield=NewPassword"`
+}
+```
+
+### Body
+
+```json
+{
+    "current_password": "Password123!",
+    "new_password": "NuevaPassword456!",
+    "confirm_new_password": "NuevaPassword456!"
+}
+```
+
+### Flujo (`UserService.ChangePassword`)
+
+```text
+PATCH /api/v1/users/password
+          │
+          ▼
+   AuthMiddleware (extrae userID del JWT)
+          │
+          ▼
+    ChangePasswordRequest
+          │
+          ▼
+   UserService.ChangePassword()
+          │
+          ├── Buscar usuario por ID
+          │
+          ├── Verificar contraseña actual (BCrypt)
+          │
+          ├── Validar reglas de complejidad de la nueva contraseña
+          │
+          ├── Rechazar si la nueva contraseña es igual a la actual
+          │
+          ├── Hashear la nueva contraseña (BCrypt)
+          │
+          └── Actualizar password_hash en base de datos
+                    │
+                    ▼
+              Respuesta HTTP
+```
+
+La nueva contraseña debe cumplir las mismas reglas de validación usadas en el registro (mínimo 8 caracteres, una mayúscula, un número y un carácter especial).
+
+### Respuesta exitosa
+
+```json
+{
+    "message": "Password changed successfully"
+}
+```
+
+### Posibles errores
+
+| Código HTTP | Code                     | Causa                                                        |
+| ----------- | -------------------------- | --------------------------------------------------------------- |
+| 401         | `UNAUTHORIZED`             | Falta el JWT o es inválido                                      |
+| 400         | `INVALID_REQUEST`          | JSON mal formado                                                 |
+| 400         | `VALIDATION_ERROR`         | Contraseñas no coinciden o `new_password` tiene menos de 8 caracteres |
+| 400         | `PASSWORD_CHANGE_FAILED`   | Contraseña actual incorrecta, nueva contraseña inválida, o igual a la actual |
+
+---
+
+# 26. Consideraciones de seguridad
 
 * El `JWT_SECRET` debe mantenerse fuera del código fuente.
 * El archivo `.env` no debe subirse al repositorio.
