@@ -112,33 +112,61 @@ func (s *UserService) VerifyEmail(email, token string) error {
 	return nil
 }
 
-func (s *UserService) Login(req *dto.LoginRequest) (string, *models.User, error) {
+func (s *UserService) Login(
+	req *dto.LoginRequest,
+) (string, error) {
+
 	var user models.User
 
-	if err := s.DB.Where("email = ?", req.Email).First(&user).Error; err != nil {
+	if err := s.DB.
+		Where("email = ?", req.Email).
+		First(&user).Error; err != nil {
+
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return "", nil, fmt.Errorf("invalid email or password")
+			return "", fmt.Errorf("invalid email or password")
 		}
 
-		return "", nil, fmt.Errorf("database error: %w", err)
+		return "", fmt.Errorf(
+			"database error: %w",
+			err,
+		)
 	}
 
-	if !utils.VerifyPassword(user.PasswordHash, req.Password) {
-		return "", nil, fmt.Errorf("invalid emaill oor password")
+	if !utils.VerifyPassword(
+		user.PasswordHash,
+		req.Password,
+	) {
+		return "", fmt.Errorf("invalid email or password")
 	}
 
-	if !user.EmailVerified {
-		return "", nil, fmt.Errorf("email not verified")
-	}
-
-	token, err := utils.GenerateJWT(&user, s.Config.JWT)
+	token, err := utils.GenerateSessionToken()
 
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to generate token: %w", err)
+		return "", err
 	}
 
-	return token, &user, nil
+	tokenHash := utils.HashToken(token)
 
+	key := fmt.Sprintf(
+		"session:%s",
+		tokenHash,
+	)
+
+	err = s.Valkey.Set(
+		context.Background(),
+		key,
+		user.ID.String(),
+		config.SessionTTL,
+	).Err()
+
+	if err != nil {
+		return "", fmt.Errorf(
+			"failed to create session: %w",
+			err,
+		)
+	}
+
+	return token, nil
 }
 
 func (s *UserService) GetUserByID(id string) (*models.User, error) {
@@ -313,6 +341,71 @@ func (s *UserService) ResetPassword(req *dto.ResetPasswordRequest) error {
 		key,
 	).Err(); err != nil {
 		return fmt.Errorf("failed to invalidate reset token: %w", err)
+	}
+
+	return nil
+}
+func (s *UserService) ValidateSession(
+	token string,
+) (string, error) {
+
+	tokenHash := utils.HashToken(token)
+
+	key := fmt.Sprintf(
+		"session:%s",
+		tokenHash,
+	)
+
+	ctx := context.Background()
+
+	userID, err := s.Valkey.Get(ctx, key).Result()
+
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return "", fmt.Errorf(
+				"session expired or invalid",
+			)
+		}
+
+		return "", fmt.Errorf(
+			"failed to validate session: %w",
+			err,
+		)
+	}
+
+	// Renovamos el TTL porque el usuario acaba
+	// de tener actividad.
+	if err := s.Valkey.Expire(
+		ctx,
+		key,
+		config.SessionTTL,
+	).Err(); err != nil {
+		return "", fmt.Errorf(
+			"failed to refresh session: %w",
+			err,
+		)
+	}
+
+	return userID, nil
+}
+
+func (s *UserService) Logout(token string) error {
+
+	tokenHash := utils.HashToken(token)
+
+	key := fmt.Sprintf(
+		"session:%s",
+		tokenHash,
+	)
+
+	if err := s.Valkey.Del(
+		context.Background(),
+		key,
+	).Err(); err != nil {
+		return fmt.Errorf(
+			"failed to delete session: %w",
+			err,
+		)
 	}
 
 	return nil

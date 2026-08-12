@@ -14,13 +14,8 @@ type Config struct {
 	Valkey       ValkeyConfig
 	Server       ServerConfig
 	EmailService EmailServiceConfig
-	JWT          JWTConfig
 }
 
-type JWTConfig struct {
-	Secret     string
-	Expiration time.Duration
-}
 type DatabaseConfig struct {
 	Host     string
 	Port     string
@@ -48,6 +43,8 @@ type EmailServiceConfig struct {
 	AppBaseURL string
 }
 
+const SessionTTL = 20 * 24 * time.Hour
+
 func Load() (*Config, error) {
 	_ = godotenv.Load()
 
@@ -74,10 +71,6 @@ func Load() (*Config, error) {
 		EmailService: EmailServiceConfig{
 			BaseURL:    getEnv("EMAIL_SERVICE_URL", "http://localhost:8000"),
 			AppBaseURL: getEnv("APP_BASE_URL", "http://localhost:3000"),
-		},
-		JWT: JWTConfig{
-			Secret:     getEnv("JWT_SECRET", ""),
-			Expiration: 30 * 24 * time.Hour,
 		},
 	}
 

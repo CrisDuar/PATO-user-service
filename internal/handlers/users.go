@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"backend/internal/config"
 	"backend/internal/dto"
 	"backend/internal/services"
 
@@ -90,6 +91,7 @@ func (h *UsersHandler) VerifyEmail(c *gin.Context) {
 }
 
 func (h *UsersHandler) Login(c *gin.Context) {
+
 	var req dto.LoginRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -100,6 +102,7 @@ func (h *UsersHandler) Login(c *gin.Context) {
 		})
 		return
 	}
+
 	if err := req.Validate(); err != nil {
 		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
 			Error:       "Validation failed",
@@ -108,7 +111,9 @@ func (h *UsersHandler) Login(c *gin.Context) {
 		})
 		return
 	}
-	token, user, err := h.userService.Login(&req)
+
+	token, err := h.userService.Login(&req)
+
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{
 			Error: err.Error(),
@@ -118,13 +123,33 @@ func (h *UsersHandler) Login(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, dto.LoginResponse{
-		Token: token,
-		User: dto.UserResponse{
-			ID:        user.ID.String(),
-			Username:  user.Username,
-			Email:     user.Email,
-			CreatedAt: user.CreatedAt.Format("2006-01-02T15:04:05z"),
-		},
+		Token:     token,
+		ExpiresIn: int64(config.SessionTTL.Seconds()),
+	})
+}
+
+func (h *UsersHandler) Logout(c *gin.Context) {
+
+	token := c.GetString("sessionToken")
+
+	if token == "" {
+		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{
+			Error: "Session token not found",
+			Code:  "UNAUTHORIZED",
+		})
+		return
+	}
+
+	if err := h.userService.Logout(token); err != nil {
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{
+			Error: err.Error(),
+			Code:  "LOGOUT_FAILED",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Logged out successfully",
 	})
 }
 

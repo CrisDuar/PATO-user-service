@@ -24,8 +24,8 @@ type LoginRequest struct {
 }
 
 type LoginResponse struct {
-	Token string       `json:"token"`
-	User  UserResponse `json:"user"`
+	Token     string `json:"token"`
+	ExpiresIn int64  `json:"expires_in"`
 }
 
 type ErrorResponse struct {

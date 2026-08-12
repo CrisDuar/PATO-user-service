@@ -60,9 +60,10 @@ func main() {
 			users.POST("/reset-password", usersHandler.ResetPassword)
 
 			protected := users.Group("")
-			protected.Use(middleware.AuthMiddleware(cfg))
+			protected.Use(middleware.AuthMiddleware(userService))
 			{
 				protected.GET("/me", usersHandler.Me)
+				protected.POST("/logout", usersHandler.Logout)
 				protected.PATCH("/email", usersHandler.UpdateEmail)
 				protected.PATCH("/password", usersHandler.ChangePassword)
 			}
