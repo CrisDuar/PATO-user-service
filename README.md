@@ -1,33 +1,33 @@
-# Implementación de autenticación con JWT — PATO User Service
+# Autenticación y gestión de usuarios — PATO User Service
 
 ## 1. Descripción
 
-Se implementó un sistema de autenticación basado en **JSON Web Tokens (JWT)** para el microservicio de usuarios de PATO.
+El microservicio de usuarios de PATO implementa autenticación basada en **sesiones opacas almacenadas en Valkey** (compatible con Redis), no en JWT autocontenido.
 
 El flujo permite:
 
 * Registrar usuarios.
 * Validar los datos de registro.
 * Almacenar contraseñas utilizando hashing con BCrypt.
-* Verificar el correo electrónico mediante un token temporal.
+* Verificar el correo electrónico mediante un código numérico temporal.
 * Iniciar sesión utilizando correo y contraseña.
-* Generar un JWT después de un login exitoso.
-* Configurar la duración del JWT mediante la configuración del servicio.
-* Utilizar el JWT posteriormente para proteger endpoints.
+* Generar un token de sesión opaco tras un login exitoso y almacenarlo en Valkey.
+* Renovar automáticamente la sesión con cada petición autenticada.
+* Cerrar sesión (logout) invalidando el token en Valkey.
+* Recuperar la contraseña mediante un flujo de "olvidé mi contraseña".
+* Utilizar el token de sesión para proteger endpoints.
 
 La arquitectura mantiene la separación de responsabilidades entre:
 
 ```text
 Handler → Service → Model/Database
               ↓
-             JWT
+           Valkey (sesiones y tokens)
 ```
 
 ---
 
 # 2. Arquitectura involucrada
-
-La implementación utiliza las siguientes capas:
 
 ```text
 internal/
@@ -35,7 +35,8 @@ internal/
 │   └── config.go
 │
 ├── database/
-│   └── database.go
+│   ├── database.go
+│   └── valkey.go
 │
 ├── dto/
 │   └── user.go
@@ -43,12 +44,15 @@ internal/
 ├── handlers/
 │   └── users.go
 │
+├── middleware/
+│   └── auth.go
+│
 ├── models/
 │   ├── user.go
 │   └── email_token.go
 │
 ├── services/
-│   ├── user.go
+│   ├── user_service.go
 │   └── email.go
 │
 └── utils/
@@ -58,23 +62,22 @@ internal/
 
 ### Responsabilidad de cada componente
 
-| Componente       | Responsabilidad                                     |
-| ---------------- | --------------------------------------------------- |
-| `config`         | Cargar variables de entorno y configuración del JWT |
-| `database`       | Conectar con PostgreSQL y ejecutar migraciones      |
-| `dto`            | Definir los datos recibidos y enviados por la API   |
-| `models`         | Representar las tablas de la base de datos          |
-| `handlers`       | Recibir peticiones HTTP y devolver respuestas       |
-| `services`       | Contener la lógica de negocio                       |
-| `utils/security` | Hash y validación de contraseñas                    |
-| `utils/jwt`      | Generación y validación de JWT                      |
-| `services/email` | Comunicación con el servicio de correos             |
+| Componente        | Responsabilidad                                          |
+| ------------------ | --------------------------------------------------------- |
+| `config`           | Cargar variables de entorno y configuración de sesión     |
+| `database`         | Conectar con PostgreSQL                                   |
+| `database/valkey`  | Conectar con Valkey (sesiones, códigos y tokens temporales) |
+| `dto`              | Definir los datos recibidos y enviados por la API          |
+| `models`           | Representar las tablas de la base de datos                 |
+| `handlers`         | Recibir peticiones HTTP y devolver respuestas               |
+| `middleware/auth`  | Validar el token de sesión en endpoints protegidos          |
+| `services`         | Contener la lógica de negocio                               |
+| `utils/security`   | Hash y validación de contraseñas, generación de tokens       |
+| `services/email`   | Comunicación con el servicio de correos                      |
 
 ---
 
 # 3. Configuración mediante `.env`
-
-Se agregó la configuración del JWT al sistema existente de variables de entorno.
 
 Ejemplo:
 
@@ -86,8 +89,20 @@ APP_DB_USER=tu_usuario_db
 APP_DB_PASSWORD=tu_contraseña_muy_segura
 APP_DB_NAME=nombre_de_tu_db
 
-# JWT
-JWT_SECRET=secret-generado-de-forma-segura
+# Valkey
+APP_VALKEY_ADDR=localhost:6379
+APP_VALKEY_USER=
+APP_VALKEY_PASSWORD=
+APP_VALKEY_DB=0
+
+# Server
+APP_PORT=8080
+APP_ENV=development
+APP_NAME=PATO User Service
+
+# Email service
+EMAIL_SERVICE_URL=http://localhost:8000
+APP_BASE_URL=http://localhost:3000
 ```
 
 El archivo `.env` **no debe subirse al repositorio**, por lo que debe estar incluido en `.gitignore`:
@@ -98,50 +113,39 @@ El archivo `.env` **no debe subirse al repositorio**, por lo que debe estar incl
 
 ---
 
-# 4. Configuración del JWT
+# 4. Sesiones y Valkey
 
-En `internal/config/config.go` se agregó la estructura:
+A diferencia de un JWT tradicional, el token de sesión es un **token opaco aleatorio**: no contiene información del usuario, solo sirve como clave para buscar la sesión en Valkey.
 
-```go
-type JWTConfig struct {
-    Secret     string
-    Expiration time.Duration
-}
-```
-
-Esta estructura se incorpora a la configuración principal:
+En `internal/config/config.go`:
 
 ```go
-type Config struct {
-    Database     DatabaseConfig
-    Server       ServerConfig
-    EmailService EmailServiceConfig
-    JWT          JWTConfig
-}
+const SessionTTL = 20 * 24 * time.Hour
 ```
 
-Durante la carga de configuración:
-
-```go
-JWT: JWTConfig{
-    Secret:     getEnv("JWT_SECRET", ""),
-    Expiration: 30 * 24 * time.Hour,
-},
-```
-
-Actualmente, el JWT tiene una duración de:
+Flujo de creación de sesión (`UserService.Login`):
 
 ```text
-30 días
+Login exitoso
+   ↓
+GenerateSessionToken()  → token aleatorio (crypto/rand)
+   ↓
+HashToken(token)        → SHA-256
+   ↓
+Valkey.Set("session:<hash>", userID, TTL=20 días)
+   ↓
+Se devuelve el token (sin hashear) al cliente
 ```
 
-La duración se calcula como:
+Solo el **hash** del token se almacena en Valkey; el token en texto plano nunca se persiste, igual que ocurre con los códigos de verificación y de recuperación de contraseña.
 
-```text
-30 × 24 horas = 720 horas
+Cada vez que el middleware valida una sesión, **renueva el TTL** (sliding expiration):
+
+```go
+s.Valkey.Expire(ctx, key, config.SessionTTL)
 ```
 
-Por lo tanto, cada vez que un usuario inicia sesión se genera un nuevo JWT cuya fecha de expiración se establece 30 días después.
+Por lo tanto, una sesión activa se mantiene viva mientras el usuario siga haciendo peticiones; si permanece inactiva 20 días, expira automáticamente.
 
 ---
 
@@ -155,24 +159,9 @@ Se utiliza **BCrypt** mediante:
 bcrypt.GenerateFromPassword()
 ```
 
-La función:
-
 ```go
 func HashPassword(password string) (string, error)
-```
-
-recibe la contraseña original y devuelve su hash.
-
-Para comprobar una contraseña:
-
-```go
 func VerifyPassword(hashedPassword, password string) bool
-```
-
-utiliza:
-
-```go
-bcrypt.CompareHashAndPassword()
 ```
 
 El flujo es:
@@ -187,23 +176,11 @@ Contraseña ingresada
      PostgreSQL
 ```
 
-Durante el login:
-
-```text
-Contraseña ingresada
-        ↓
-CompareHashAndPassword()
-        ↓
-¿Coincide?
-   ├── Sí → continuar
-   └── No → rechazar login
-```
-
 ---
 
 # 6. Validación de contraseñas
 
-Antes de crear un usuario se valida que la contraseña cumpla los requisitos establecidos.
+Antes de crear un usuario, o al cambiar/reestablecer la contraseña, se valida que cumpla los requisitos establecidos.
 
 Actualmente debe:
 
@@ -226,32 +203,7 @@ internal/utils/security.go
 
 ---
 
-# 7. DTO para Login
-
-Se agregó un DTO específico para recibir las credenciales:
-
-```go
-type LoginRequest struct {
-    Email    string `json:"email" validate:"required,email"`
-    Password string `json:"password" validate:"required"`
-}
-```
-
-También se agregó su método de validación:
-
-```go
-func (r *LoginRequest) Validate() error {
-    return validate.Struct(r)
-}
-```
-
-El objetivo del DTO es separar los datos recibidos mediante HTTP de los modelos utilizados para persistencia.
-
----
-
-# 8. Flujo de Login
-
-El proceso de autenticación sigue este flujo:
+# 7. Flujo de Login
 
 ```text
 POST /api/v1/users/login
@@ -267,46 +219,28 @@ POST /api/v1/users/login
           │
           ├── Buscar usuario por email
           │
-          ├── Verificar email
-          │
           ├── Verificar contraseña
           │
-          └── Generar JWT
+          ├── Generar token de sesión aleatorio
+          │
+          └── Guardar hash del token en Valkey (TTL 20 días)
                     │
                     ▼
-              Respuesta HTTP
+              Respuesta HTTP (token + expires_in)
                     │
                     ▼
                  Cliente
 ```
 
----
-
-# 9. Handler de Login
-
-El handler es responsable de:
-
-1. Recibir la petición.
-2. Convertir el JSON a `LoginRequest`.
-3. Validar los datos.
-4. Invocar al `UserService`.
-5. Devolver el JWT y los datos del usuario.
-
-La ruta se registra en `main.go`:
+La ruta se registra en `cmd/api/main.go`:
 
 ```go
 users.POST("/login", usersHandler.Login)
 ```
 
-Por lo tanto, el endpoint completo es:
-
-```text
-POST /api/v1/users/login
-```
-
 ---
 
-# 10. Endpoint de Login
+# 8. Endpoint de Login
 
 ### URL
 
@@ -327,51 +261,41 @@ POST http://localhost:8080/api/v1/users/login
 
 ```json
 {
-    "token": "eyJhbGciOiJIUzI1NiIs...",
-    "user": {
-        "id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-        "username": "natalia",
-        "email": "natalia@gmail.com",
-        "created_at": "2026-08-08T..."
-    }
+    "token": "d290f1ee-6c54-4b01-90e6-d701748f0851...",
+    "expires_in": 1728000
 }
 ```
 
-El campo:
-
-```json
-"token"
-```
-
-contiene el JWT generado para el usuario.
+`expires_in` está expresado en segundos (20 días = 1 728 000 segundos).
 
 ---
 
-# 11. Verificación del correo antes del Login
+# 9. Verificación del correo antes del Login
 
-El sistema requiere que el usuario haya verificado su correo antes de poder autenticarse.
+El sistema no impide técnicamente el login si el correo no está verificado a nivel de middleware, pero el registro genera un código de verificación que debe usarse para marcar `email_verified = true`.
 
-Durante el registro se genera un token:
+Durante el registro se genera un código numérico:
 
 ```go
 const emailVerificationTokenTTL = 15 * time.Minute
 ```
 
-Por lo tanto:
+El código se guarda en Valkey bajo la clave:
 
 ```text
-Token de verificación → 15 minutos
-JWT de sesión          → 30 días
+pato:email-verification:<email>
 ```
 
-El flujo completo es:
+Flujo:
 
 ```text
 Registro
    ↓
 Crear usuario
    ↓
-Generar token de verificación
+Generar código de verificación
+   ↓
+Guardar en Valkey (TTL 15 min)
    ↓
 Enviar correo
    ↓
@@ -379,116 +303,33 @@ Usuario verifica email
    ↓
 email_verified = true
    ↓
-Login permitido
+Código eliminado de Valkey
 ```
 
 ---
 
-# 12. Diferencia entre los tokens
+# 10. Tipos de tokens usados en el sistema
 
-El sistema utiliza dos tipos de tokens con objetivos diferentes.
+| Token                     |   Duración | Almacenamiento          | Uso                          |
+| -------------------------- | ---------: | ------------------------ | ----------------------------- |
+| Código de verificación de email | 15 minutos | Valkey (`pato:email-verification:<email>`) | Verificar correo |
+| Token de sesión             |    20 días | Valkey (`session:<hash>`) | Autenticación                |
+| Token de recuperación de contraseña | 15 minutos | Valkey (`password_reset:<hash>`) | Reestablecer contraseña |
 
-| Token                    |   Duración | Uso              |
-| ------------------------ | ---------: | ---------------- |
-| Email Verification Token | 15 minutos | Verificar correo |
-| JWT                      |    30 días | Autenticación    |
-
-El token de verificación **no es un JWT**. Es un token aleatorio que se genera mediante:
-
-```go
-crypto/rand
-```
-
-y cuyo hash SHA-256 se almacena en la base de datos.
-
-El JWT, en cambio, se utiliza posteriormente para autenticar las peticiones.
+Todos los tokens/códigos son aleatorios (generados con `crypto/rand`) y, salvo el código de verificación, se almacenan hasheados con SHA-256 mediante `utils.HashToken`.
 
 ---
 
-
-# 13. Generación del JWT
-
-El JWT utiliza un secreto configurado mediante:
-
-```env
-JWT_SECRET=...
-```
-
-El secreto es utilizado para firmar el token.
-
-La información relevante del JWT incluye:
-
-```text
-sub → identificador del usuario
-username → nombre de usuario
-email → correo
-iat → fecha de emisión
-exp → fecha de expiración
-```
-
-Conceptualmente:
-
-```text
-Usuario
-   ↓
-Login exitoso
-   ↓
-GenerateJWT()
-   ↓
-JWT firmado
-   ↓
-Cliente
-```
-
-El cliente posteriormente envía el token mediante:
-
-```http
-Authorization: Bearer <JWT>
-```
-
----
-
-# 14. Duración del JWT
-
-Actualmente:
-
-```go
-Expiration: 30 * 24 * time.Hour
-```
-
-Esto significa que si un usuario inicia sesión el:
-
-```text
-8 de agosto a las 10:00
-```
-
-su JWT expirará aproximadamente el:
-
-```text
-7 de septiembre a las 10:00
-```
-
-Si el usuario vuelve a iniciar sesión después, recibe un nuevo JWT con una nueva fecha de expiración.
-
-La expiración se encuentra dentro del propio JWT mediante el claim:
-
-```text
-exp
-```
-
----
-
-# 15. Middleware de autenticación
+# 11. Middleware de autenticación
 
 Para proteger endpoints se utiliza un middleware que:
 
 1. Obtiene el header `Authorization`.
 2. Comprueba que utilice el esquema `Bearer`.
-3. Extrae el JWT.
-4. Valida su firma.
-5. Comprueba su expiración.
-6. Obtiene la información del usuario.
-7. Permite continuar si el token es válido.
+3. Extrae el token de sesión.
+4. Consulta Valkey (`ValidateSession`) para resolver el `userID` asociado.
+5. Renueva el TTL de la sesión (sliding expiration).
+6. Permite continuar si la sesión es válida.
 
 Flujo:
 
@@ -496,7 +337,7 @@ Flujo:
 Request
   │
   ▼
-Authorization: Bearer JWT
+Authorization: Bearer <token>
   │
   ▼
 AuthMiddleware
@@ -504,22 +345,167 @@ AuthMiddleware
   ├── ¿Existe token?
   │       └── No → 401
   │
-  ├── ¿Firma válida?
-  │       └── No → 401
-  │
-  ├── ¿Token expirado?
-  │       └── Sí → 401
+  ├── ¿Sesión existe en Valkey?
+  │       └── No → 401 (expirada o inválida)
   │
   └── Sí
+       ├── Renovar TTL
+       ├── c.Set("userID", ...)
+       ├── c.Set("sessionToken", ...)
        ↓
     Endpoint
 ```
 
 ---
 
-# 16. Pruebas realizadas con Postman
+# 12. Logout
 
-## 16.1 Health Check
+Permite invalidar la sesión activa eliminándola de Valkey.
+
+### Handler y ruta
+
+```go
+protected.POST("/logout", usersHandler.Logout)
+```
+
+```text
+POST /api/v1/users/logout
+```
+
+Requiere autenticación:
+
+```http
+Authorization: Bearer <token>
+```
+
+### Flujo (`UserService.Logout`)
+
+```text
+POST /api/v1/users/logout
+          │
+          ▼
+   AuthMiddleware (extrae sessionToken)
+          │
+          ▼
+   UserService.Logout()
+          │
+          └── Valkey.Del("session:<hash>")
+                    │
+                    ▼
+              Respuesta HTTP
+```
+
+### Respuesta exitosa
+
+```json
+{
+    "message": "Logged out successfully"
+}
+```
+
+Tras el logout, el token deja de ser válido inmediatamente, aunque no haya expirado su TTL.
+
+---
+
+# 13. Recuperación de contraseña (Forgot / Reset)
+
+## 13.1 Forgot Password
+
+```text
+POST /api/v1/users/forgot-password
+```
+
+### Body
+
+```json
+{
+    "email": "natalia@gmail.com"
+}
+```
+
+### Flujo (`UserService.ForgotPassword`)
+
+```text
+POST /api/v1/users/forgot-password
+          │
+          ▼
+   UserService.ForgotPassword()
+          │
+          ├── Buscar usuario por email
+          │      └── No existe → responder OK igualmente (no revelar existencia)
+          │
+          ├── Generar código de recuperación
+          │
+          ├── Guardar hash en Valkey ("password_reset:<hash>", TTL 15 min)
+          │
+          └── Enviar correo con el código
+                    │
+                    ▼
+              Respuesta HTTP
+```
+
+### Respuesta
+
+```json
+{
+    "message": "If the email is registered, a password reset token has been sent"
+}
+```
+
+La respuesta es siempre la misma exista o no el correo, para evitar filtrar qué correos están registrados.
+
+## 13.2 Reset Password
+
+```text
+POST /api/v1/users/reset-password
+```
+
+### Body
+
+```json
+{
+    "token": "CODIGO_RECIBIDO",
+    "password": "NuevaPassword456!",
+    "confirm_password": "NuevaPassword456!"
+}
+```
+
+### Flujo (`UserService.ResetPassword`)
+
+```text
+POST /api/v1/users/reset-password
+          │
+          ▼
+   UserService.ResetPassword()
+          │
+          ├── Validar complejidad de la nueva contraseña
+          │
+          ├── Buscar token en Valkey ("password_reset:<hash>")
+          │      └── No existe / expirado → error
+          │
+          ├── Hashear la nueva contraseña (BCrypt)
+          │
+          ├── Actualizar password_hash en base de datos
+          │
+          └── Eliminar el token de Valkey (uso único)
+                    │
+                    ▼
+              Respuesta HTTP
+```
+
+### Respuesta exitosa
+
+```json
+{
+    "message": "Password reset successfully"
+}
+```
+
+---
+
+# 14. Pruebas realizadas con Postman
+
+## 14.1 Health Check
 
 ### Request
 
@@ -532,13 +518,14 @@ GET http://localhost:8080/health
 ```json
 {
     "status": "healthy",
-    "app": "PATO User Service"
+    "app": "PATO User Service",
+    "valkey": "healthy"
 }
 ```
 
 ---
 
-## 16.2 Registro
+## 14.2 Registro
 
 ### Request
 
@@ -563,7 +550,7 @@ El usuario es almacenado en PostgreSQL y se genera el proceso de verificación d
 
 ---
 
-# 17. Verificación de correo
+## 14.3 Verificación de correo
 
 ### Request
 
@@ -575,7 +562,8 @@ POST http://localhost:8080/api/v1/users/verify-email
 
 ```json
 {
-    "token": "TOKEN_DE_VERIFICACION"
+    "email": "natalia@gmail.com",
+    "token": "CODIGO_DE_VERIFICACION"
 }
 ```
 
@@ -589,7 +577,7 @@ POST http://localhost:8080/api/v1/users/verify-email
 
 ---
 
-# 18. Login
+## 14.4 Login
 
 ### Request
 
@@ -610,87 +598,51 @@ POST http://localhost:8080/api/v1/users/login
 
 ```json
 {
-    "token": "eyJhbGciOiJIUzI1NiIs...",
-    "user": {
-        "id": "...",
-        "username": "natalia",
-        "email": "natalia@gmail.com",
-        "created_at": "..."
-    }
+    "token": "d290f1ee-6c54-4b01-90e6-d701748f0851...",
+    "expires_in": 1728000
 }
 ```
 
 ---
 
-# 19. Uso del JWT en Postman
-
-Para probar un endpoint protegido:
+## 14.5 Uso del token de sesión en Postman
 
 1. Crear una petición.
 2. Ir a **Authorization**.
 3. Seleccionar **Bearer Token**.
-4. Pegar el JWT obtenido durante el login.
+4. Pegar el token obtenido durante el login.
 5. Ejecutar la petición.
 
-Postman enviará:
-
 ```http
-Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
+Authorization: Bearer d290f1ee-6c54-4b01-90e6-d701748f0851...
 ```
-
-Si el token es válido, el middleware permitirá acceder al endpoint.
 
 ---
 
-# 20. Prueba de acceso sin JWT
-
-Para comprobar que el middleware realmente protege el endpoint:
+## 14.6 Prueba de acceso sin token
 
 ```text
 GET /api/v1/users/me
 ```
 
-sin enviar el header `Authorization`.
-
-El servidor debe responder:
+sin enviar el header `Authorization`, el servidor debe responder:
 
 ```text
 401 Unauthorized
 ```
 
-Esto confirma que el endpoint no puede ser utilizado sin autenticación.
-
----
-
-# 21. Prueba de acceso con JWT
-
-Al enviar:
-
-```http
-Authorization: Bearer <JWT>
-```
-
-el servidor debe validar correctamente el token y permitir el acceso:
+## 14.7 Prueba de acceso con token válido / logout
 
 ```text
-200 OK
-```
-
-Por lo tanto:
-
-```text
-Sin JWT → 401 Unauthorized
-Con JWT válido → 200 OK
-Con JWT inválido → 401 Unauthorized
-Con JWT expirado → 401 Unauthorized
+Sin token           → 401 Unauthorized
+Con token válido     → 200 OK
+Con token inválido   → 401 Unauthorized
+Tras hacer logout    → 401 Unauthorized (aunque el TTL no haya vencido)
 ```
 
 ---
 
-
-# 22. Flujo completo del sistema
-
-El flujo final de autenticación es:
+# 15. Flujo completo del sistema
 
 ```text
                     ┌──────────────┐
@@ -723,10 +675,10 @@ El flujo final de autenticación es:
                     Verificar password
                            │
                            ▼
-                       GenerateJWT
+                Generar token de sesión
                            │
                            ▼
-                         JWT
+                 Guardar sesión en Valkey
                            │
                            ▼
                     Cliente autenticado
@@ -737,29 +689,39 @@ El flujo final de autenticación es:
                            │
                      ┌─────┴─────┐
                      │           │
-                   Válido      Inválido
+                Válido en     No existe/
+                 Valkey        expirado
                      │           │
                      ▼           ▼
                   Endpoint      401
+                     │
+                     ▼
+                  Logout
+                     │
+                     ▼
+           Eliminar sesión de Valkey
 ```
 
 ---
 
-# 23. Resumen de endpoints
+# 16. Resumen de endpoints
 
-| Método | Endpoint                     | Descripción                   | Autenticación |
-| ------ | ---------------------------- | ----------------------------- | ------------- |
-| `GET`  | `/health`                    | Comprobar estado del servicio | No            |
-| `POST` | `/api/v1/users/register`     | Registrar usuario             | No            |
-| `POST` | `/api/v1/users/verify-email` | Verificar correo              | No            |
-| `POST` | `/api/v1/users/login`        | Iniciar sesión y obtener JWT  | No            |
-| `GET`  | `/api/v1/users/me`           | Ejemplo de endpoint protegido | JWT           |
-| `PATCH` | `/api/v1/users/email`       | Cambiar el correo del usuario | JWT           |
-| `PATCH` | `/api/v1/users/password`    | Cambiar la contraseña del usuario | JWT       |
+| Método  | Endpoint                          | Descripción                        | Autenticación |
+| ------- | ---------------------------------- | ------------------------------------ | -------------- |
+| `GET`   | `/health`                          | Comprobar estado del servicio (incluye Valkey) | No  |
+| `POST`  | `/api/v1/users/register`           | Registrar usuario                    | No             |
+| `POST`  | `/api/v1/users/verify-email`       | Verificar correo                     | No             |
+| `POST`  | `/api/v1/users/login`              | Iniciar sesión y obtener token       | No             |
+| `POST`  | `/api/v1/users/forgot-password`    | Solicitar recuperación de contraseña | No             |
+| `POST`  | `/api/v1/users/reset-password`     | Reestablecer contraseña con token    | No             |
+| `GET`   | `/api/v1/users/me`                 | Obtener datos del usuario autenticado | Sesión        |
+| `POST`  | `/api/v1/users/logout`             | Cerrar sesión                        | Sesión         |
+| `PATCH` | `/api/v1/users/email`              | Cambiar el correo del usuario        | Sesión         |
+| `PATCH` | `/api/v1/users/password`           | Cambiar la contraseña del usuario    | Sesión         |
 
 ---
 
-# 24. Cambio de correo electrónico
+# 17. Cambio de correo electrónico
 
 Permite a un usuario autenticado actualizar su correo, confirmando su identidad con la contraseña actual.
 
@@ -769,8 +731,6 @@ Permite a un usuario autenticado actualizar su correo, confirmando su identidad 
 protected.PATCH("/email", usersHandler.UpdateEmail)
 ```
 
-El endpoint completo es:
-
 ```text
 PATCH /api/v1/users/email
 ```
@@ -778,7 +738,7 @@ PATCH /api/v1/users/email
 Requiere autenticación:
 
 ```http
-Authorization: Bearer <JWT>
+Authorization: Bearer <token>
 ```
 
 ### DTO
@@ -805,7 +765,7 @@ type UpdateEmailRequest struct {
 PATCH /api/v1/users/email
           │
           ▼
-   AuthMiddleware (extrae userID del JWT)
+   AuthMiddleware (extrae userID de la sesión)
           │
           ▼
     UpdateEmailRequest
@@ -829,7 +789,7 @@ PATCH /api/v1/users/email
               Respuesta HTTP
 ```
 
-Al cambiar el correo, la cuenta queda como **no verificada** nuevamente (`email_verified = false`), por lo que el usuario debe verificar el nuevo correo antes de poder volver a iniciar sesión, reutilizando el mismo mecanismo de verificación del registro (código numérico con TTL de 15 minutos).
+Al cambiar el correo, la cuenta queda como **no verificada** nuevamente (`email_verified = false`), por lo que el usuario debe verificar el nuevo correo, reutilizando el mismo mecanismo de verificación del registro (código numérico con TTL de 15 minutos).
 
 ### Respuesta exitosa
 
@@ -844,16 +804,16 @@ Al cambiar el correo, la cuenta queda como **no verificada** nuevamente (`email_
 
 ### Posibles errores
 
-| Código HTTP | Code                  | Causa                                             |
-| ----------- | ---------------------- | -------------------------------------------------- |
-| 401         | `UNAUTHORIZED`          | Falta el JWT o es inválido                          |
-| 400         | `INVALID_REQUEST`       | JSON mal formado                                    |
-| 400         | `VALIDATION_ERROR`      | `new_email` no es un email válido o falta `password` |
-| 400         | `EMAIL_UPDATE_FAILED`   | Contraseña incorrecta, email igual al actual, o email ya registrado |
+| Código HTTP | Code                | Causa                                                                 |
+| ----------- | -------------------- | ---------------------------------------------------------------------- |
+| 401         | `UNAUTHORIZED`        | Falta el token o es inválido/expirado                                  |
+| 400         | `INVALID_REQUEST`     | JSON mal formado                                                       |
+| 400         | `VALIDATION_ERROR`    | `new_email` no es un email válido o falta `password`                    |
+| 400         | `EMAIL_UPDATE_FAILED` | Contraseña incorrecta, email igual al actual, o email ya registrado    |
 
 ---
 
-# 25. Cambio de contraseña
+# 18. Cambio de contraseña
 
 Permite a un usuario autenticado cambiar su contraseña, validando la contraseña actual antes de aplicar la nueva.
 
@@ -863,8 +823,6 @@ Permite a un usuario autenticado cambiar su contraseña, validando la contraseñ
 protected.PATCH("/password", usersHandler.ChangePassword)
 ```
 
-El endpoint completo es:
-
 ```text
 PATCH /api/v1/users/password
 ```
@@ -872,7 +830,7 @@ PATCH /api/v1/users/password
 Requiere autenticación:
 
 ```http
-Authorization: Bearer <JWT>
+Authorization: Bearer <token>
 ```
 
 ### DTO
@@ -901,7 +859,7 @@ type ChangePasswordRequest struct {
 PATCH /api/v1/users/password
           │
           ▼
-   AuthMiddleware (extrae userID del JWT)
+   AuthMiddleware (extrae userID de la sesión)
           │
           ▼
     ChangePasswordRequest
@@ -937,31 +895,30 @@ La nueva contraseña debe cumplir las mismas reglas de validación usadas en el 
 
 ### Posibles errores
 
-| Código HTTP | Code                     | Causa                                                        |
-| ----------- | -------------------------- | --------------------------------------------------------------- |
-| 401         | `UNAUTHORIZED`             | Falta el JWT o es inválido                                      |
-| 400         | `INVALID_REQUEST`          | JSON mal formado                                                 |
-| 400         | `VALIDATION_ERROR`         | Contraseñas no coinciden o `new_password` tiene menos de 8 caracteres |
-| 400         | `PASSWORD_CHANGE_FAILED`   | Contraseña actual incorrecta, nueva contraseña inválida, o igual a la actual |
+| Código HTTP | Code                    | Causa                                                                       |
+| ----------- | -------------------------- | ------------------------------------------------------------------------------ |
+| 401         | `UNAUTHORIZED`             | Falta el token o es inválido/expirado                                          |
+| 400         | `INVALID_REQUEST`          | JSON mal formado                                                                |
+| 400         | `VALIDATION_ERROR`         | Contraseñas no coinciden o `new_password` tiene menos de 8 caracteres            |
+| 400         | `PASSWORD_CHANGE_FAILED`   | Contraseña actual incorrecta, nueva contraseña inválida, o igual a la actual    |
 
 ---
 
-# 26. Consideraciones de seguridad
+# 19. Consideraciones de seguridad
 
-* El `JWT_SECRET` debe mantenerse fuera del código fuente.
 * El archivo `.env` no debe subirse al repositorio.
-* Las contraseñas nunca deben almacenarse en texto plano.
-* Se utiliza BCrypt para almacenar contraseñas.
-* Los tokens de verificación no se almacenan directamente; se almacena su hash.
-* Los JWT deben enviarse mediante HTTPS en ambientes de producción.
-* Los endpoints protegidos deben validar la firma y expiración del JWT.
-* Los mensajes de autenticación deben evitar revelar información sensible sobre usuarios existentes.
+* Las contraseñas nunca deben almacenarse en texto plano; se utiliza BCrypt.
+* Los tokens de sesión, verificación y recuperación son aleatorios (`crypto/rand`) y se almacenan hasheados (SHA-256) en Valkey, nunca en texto plano.
+* Las sesiones se pueden invalidar en cualquier momento (logout), a diferencia de un JWT stateless que sigue siendo válido hasta su expiración.
+* El TTL de sesión se renueva con cada petición autenticada (sliding expiration de 20 días de inactividad).
+* Los tokens deben enviarse mediante HTTPS en ambientes de producción.
+* Los mensajes de autenticación y recuperación de contraseña evitan revelar si un correo está registrado o no.
 
 ---
 
-# 25. Resultado
+# 20. Resultado
 
-Con esta implementación, el PATO User Service cuenta con un mecanismo básico de autenticación basado en JWT que permite:
+Con esta implementación, el PATO User Service cuenta con un mecanismo de autenticación basado en sesiones opacas respaldadas por Valkey que permite:
 
 ```text
 Registro
@@ -970,11 +927,13 @@ Verificación de correo
    ↓
 Login
    ↓
-Generación de JWT
+Sesión almacenada en Valkey
    ↓
 Autenticación mediante Bearer Token
    ↓
 Acceso a endpoints protegidos
+   ↓
+Logout (invalidación explícita) o expiración por inactividad
 ```
 
-El JWT tiene actualmente una duración de **30 días**, mientras que el token de verificación de correo tiene una duración de **15 minutos**.
+La sesión tiene actualmente una duración de **20 días de inactividad** (renovable), el código de verificación de correo dura **15 minutos**, y el token de recuperación de contraseña también dura **15 minutos**.
