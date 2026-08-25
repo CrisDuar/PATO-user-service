@@ -1,0 +1,22 @@
+name: Deploy container
+
+on:
+    workflow_run:
+        workflows: [Test and push container]
+        types:
+        - completed
+    workflow_dispatch:
+
+jobs:
+
+  deploy-on-server:
+    runs-on: self-hosted
+
+    steps:
+      - name: Execute docker compose
+        env:
+          WORK_DIR: ${{ secrets.WORK_DIR }}
+        run: |
+          cd $WORK_DIR
+          docker compose pull
+          docker compose up -d
