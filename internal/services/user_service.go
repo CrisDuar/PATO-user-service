@@ -169,6 +169,16 @@ func (s *UserService) Login(
 	return token, nil
 }
 
+func (s *UserService) ListUsers() ([]models.User, error) {
+	var users []models.User
+
+	if err := s.DB.Order("created_at desc").Find(&users).Error; err != nil {
+		return nil, fmt.Errorf("database error: %w", err)
+	}
+
+	return users, nil
+}
+
 func (s *UserService) GetUserByID(id string) (*models.User, error) {
 	userID, err := uuid.Parse(id)
 	if err != nil {

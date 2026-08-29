@@ -190,6 +190,29 @@ func (h *UsersHandler) Me(c *gin.Context) {
 	})
 }
 
+func (h *UsersHandler) ListUsers(c *gin.Context) {
+	users, err := h.userService.ListUsers()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{
+			Error: err.Error(),
+			Code:  "USERS_LIST_FAILED",
+		})
+		return
+	}
+
+	responses := make([]dto.UserResponse, 0, len(users))
+	for _, user := range users {
+		responses = append(responses, dto.UserResponse{
+			ID:        user.ID.String(),
+			Username:  user.Username,
+			Email:     user.Email,
+			CreatedAt: user.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		})
+	}
+
+	c.JSON(http.StatusOK, responses)
+}
+
 func (h *UsersHandler) UpdateEmail(c *gin.Context) {
 	userIDStr, exists := c.Get("userID")
 	if !exists {

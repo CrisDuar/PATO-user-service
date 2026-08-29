@@ -63,6 +63,7 @@ func main() {
 			protected.Use(middleware.AuthMiddleware(userService))
 			{
 				protected.GET("/me", usersHandler.Me)
+				protected.GET("", usersHandler.ListUsers)
 				protected.POST("/logout", usersHandler.Logout)
 				protected.PATCH("/email", usersHandler.UpdateEmail)
 				protected.PATCH("/password", usersHandler.ChangePassword)
