@@ -714,6 +714,7 @@ Tras hacer logout    → 401 Unauthorized (aunque el TTL no haya vencido)
 | `POST`  | `/api/v1/users/login`              | Iniciar sesión y obtener token       | No             |
 | `POST`  | `/api/v1/users/forgot-password`    | Solicitar recuperación de contraseña | No             |
 | `POST`  | `/api/v1/users/reset-password`     | Reestablecer contraseña con token    | No             |
+| `GET`   | `/api/v1/users`                    | Listar todos los usuarios            | Sesión         |
 | `GET`   | `/api/v1/users/me`                 | Obtener datos del usuario autenticado | Sesión        |
 | `POST`  | `/api/v1/users/logout`             | Cerrar sesión                        | Sesión         |
 | `PATCH` | `/api/v1/users/email`              | Cambiar el correo del usuario        | Sesión         |
@@ -904,7 +905,83 @@ La nueva contraseña debe cumplir las mismas reglas de validación usadas en el 
 
 ---
 
-# 19. Consideraciones de seguridad
+# 19. Listado de usuarios
+
+Permite a cualquier usuario autenticado obtener el listado completo de usuarios registrados.
+
+### Handler y ruta
+
+```go
+protected.GET("", usersHandler.ListUsers)
+```
+
+```text
+GET /api/v1/users
+```
+
+Requiere autenticación:
+
+```http
+Authorization: Bearer <token>
+```
+
+### Ejemplo de uso (Postman)
+
+**Request**
+
+```http
+GET http://localhost:8080/api/v1/users
+Authorization: Bearer d290f1ee-6c54-4b01-90e6-d701748f0851...
+```
+
+Este endpoint no recibe body, ya que es una petición `GET`.
+
+### Flujo (`UserService.ListUsers`)
+
+```text
+GET /api/v1/users
+          │
+          ▼
+   AuthMiddleware (valida la sesión)
+          │
+          ▼
+   UserService.ListUsers()
+          │
+          └── SELECT * FROM app_user ORDER BY created_at DESC
+                    │
+                    ▼
+              Respuesta HTTP
+```
+
+### Respuesta exitosa
+
+```json
+[
+    {
+        "id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+        "username": "natalia",
+        "email": "natalia@gmail.com",
+        "created_at": "2026-08-08T..."
+    },
+    {
+        "id": "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy",
+        "username": "pedro",
+        "email": "pedro@gmail.com",
+        "created_at": "2026-08-07T..."
+    }
+]
+```
+
+### Posibles errores
+
+| Código HTTP | Code                | Causa                                   |
+| ----------- | -------------------- | ----------------------------------------- |
+| 401         | `UNAUTHORIZED`        | Falta el token o es inválido/expirado     |
+| 500         | `USERS_LIST_FAILED`   | Error al consultar la base de datos       |
+
+---
+
+# 20. Consideraciones de seguridad
 
 * El archivo `.env` no debe subirse al repositorio.
 * Las contraseñas nunca deben almacenarse en texto plano; se utiliza BCrypt.
@@ -916,7 +993,7 @@ La nueva contraseña debe cumplir las mismas reglas de validación usadas en el 
 
 ---
 
-# 20. Resultado
+# 21. Resultado
 
 Con esta implementación, el PATO User Service cuenta con un mecanismo de autenticación basado en sesiones opacas respaldadas por Valkey que permite:
 

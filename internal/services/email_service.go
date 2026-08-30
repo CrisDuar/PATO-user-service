@@ -129,7 +129,7 @@ func (s *EmailService) SendVerificationEmail(username, email, token string) erro
 
 	var lastErr error
 	for attempt := 1; attempt <= emailSendMaxRetries; attempt++ {
-		lastErr = s.send(body)
+		lastErr = s.sendActivation(body)
 		if lastErr == nil {
 			log.Printf("verification email sent to %s (attempt %d)", email, attempt)
 			return nil
@@ -144,8 +144,8 @@ func (s *EmailService) SendVerificationEmail(username, email, token string) erro
 	return fmt.Errorf("failed to send verification email after %d attempts: %w", emailSendMaxRetries, lastErr)
 }
 
-func (s *EmailService) send(body []byte) error {
-	req, err := http.NewRequest(http.MethodPost, s.baseURL+"/api/sendEmailToken", bytes.NewReader(body))
+func (s *EmailService) sendActivation(body []byte) error {
+	req, err := http.NewRequest(http.MethodPost, s.baseURL+"/api/sendEmailActivation", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("failed to build request: %w", err)
 	}
