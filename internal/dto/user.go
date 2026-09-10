@@ -49,6 +49,10 @@ type UpdateEmailRequest struct {
 	Password string `json:"password" validate:"required"`
 }
 
+type UpdateUsernameRequest struct {
+	NewUsername string `json:"new_username" validate:"required,min=2,max=50"`
+}
+
 type ChangePasswordRequest struct {
 	CurrentPassword    string `json:"current_password" validate:"required"`
 	NewPassword        string `json:"new_password" validate:"required,min=8"`
@@ -94,5 +98,9 @@ func (r *ChangePasswordRequest) Validate() error {
 }
 
 func (r *UpdateEmailRequest) Validate() error {
+	return validate.Struct(r)
+}
+
+func (r *UpdateUsernameRequest) Validate() error {
 	return validate.Struct(r)
 }

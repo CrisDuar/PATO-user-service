@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
@@ -115,6 +116,14 @@ func (h *UsersHandler) Login(c *gin.Context) {
 	token, err := h.userService.Login(&req)
 
 	if err != nil {
+		if errors.Is(err, services.ErrEmailNotVerified) {
+			c.JSON(http.StatusForbidden, dto.ErrorResponse{
+				Error: err.Error(),
+				Code:  "EMAIL_NOT_VERIFIED",
+			})
+			return
+		}
+
 		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{
 			Error: err.Error(),
 			Code:  "LOGIN_FAILED",
@@ -256,6 +265,61 @@ func (h *UsersHandler) UpdateEmail(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
 			Error: err.Error(),
 			Code:  "EMAIL_UPDATE_FAILED",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, dto.UserResponse{
+		ID:        user.ID.String(),
+		Username:  user.Username,
+		Email:     user.Email,
+		CreatedAt: user.CreatedAt.Format("2006-01-02T15:04:05Z"),
+	})
+}
+
+func (h *UsersHandler) UpdateUsername(c *gin.Context) {
+	userIDStr, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{
+			Error: "Unauthorized",
+			Code:  "UNAUTHORIZED",
+		})
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr.(string))
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{
+			Error: "Invalid user information in token",
+			Code:  "UNAUTHORIZED",
+		})
+		return
+	}
+
+	var req dto.UpdateUsernameRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
+			Error:       "Invalid request format",
+			Code:        "INVALID_REQUEST",
+			Description: err.Error(),
+		})
+		return
+	}
+
+	if err := req.Validate(); err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
+			Error:       "Validation failed",
+			Code:        "VALIDATION_ERROR",
+			Description: err.Error(),
+		})
+		return
+	}
+
+	user, err := h.userService.UpdateUsername(userID, &req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
+			Error: err.Error(),
+			Code:  "USERNAME_UPDATE_FAILED",
 		})
 		return
 	}

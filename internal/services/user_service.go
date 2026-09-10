@@ -19,6 +19,8 @@ import (
 
 const emailVerificationTokenTTL = 15 * time.Minute
 
+var ErrEmailNotVerified = errors.New("email not verified")
+
 func verificationCodeKey(email string) string {
 	return fmt.Sprintf("pato:email-verification:%s", email)
 }
@@ -139,6 +141,10 @@ func (s *UserService) Login(
 		return "", fmt.Errorf("invalid email or password")
 	}
 
+	if !user.EmailVerified {
+		return "", ErrEmailNotVerified
+	}
+
 	token, err := utils.GenerateSessionToken()
 
 	if err != nil {
@@ -230,6 +236,28 @@ func (s *UserService) UpdateEmail(userID uuid.UUID, req *dto.UpdateEmailRequest)
 	}
 
 	s.issueVerificationEmail(&user)
+
+	return &user, nil
+}
+
+func (s *UserService) UpdateUsername(userID uuid.UUID, req *dto.UpdateUsernameRequest) (*models.User, error) {
+	var user models.User
+	if err := s.DB.Where("id = ?", userID).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("user not found")
+		}
+		return nil, fmt.Errorf("database error: %w", err)
+	}
+
+	if req.NewUsername == user.Username {
+		return nil, fmt.Errorf("new username must be different from current username")
+	}
+
+	user.Username = req.NewUsername
+
+	if err := s.DB.Model(&user).Select("Username").Updates(user).Error; err != nil {
+		return nil, fmt.Errorf("failed to update username: %w", err)
+	}
 
 	return &user, nil
 }
