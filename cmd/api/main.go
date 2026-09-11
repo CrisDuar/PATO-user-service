@@ -66,6 +66,7 @@ func main() {
 				protected.GET("", usersHandler.ListUsers)
 				protected.POST("/logout", usersHandler.Logout)
 				protected.PATCH("/email", usersHandler.UpdateEmail)
+				protected.PATCH("/username", usersHandler.UpdateUsername)
 				protected.PATCH("/password", usersHandler.ChangePassword)
 			}
 		}

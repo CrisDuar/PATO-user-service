@@ -221,6 +221,8 @@ POST /api/v1/users/login
           │
           ├── Verificar contraseña
           │
+          ├── Rechazar si email_verified = false
+          │
           ├── Generar token de sesión aleatorio
           │
           └── Guardar hash del token en Valkey (TTL 20 días)
@@ -268,11 +270,22 @@ POST http://localhost:8080/api/v1/users/login
 
 `expires_in` está expresado en segundos (20 días = 1 728 000 segundos).
 
+### Respuesta si el correo no está verificado
+
+```json
+{
+    "error": "email not verified",
+    "code": "EMAIL_NOT_VERIFIED"
+}
+```
+
+HTTP `403 Forbidden`.
+
 ---
 
 # 9. Verificación del correo antes del Login
 
-El sistema no impide técnicamente el login si el correo no está verificado a nivel de middleware, pero el registro genera un código de verificación que debe usarse para marcar `email_verified = true`.
+`UserService.Login` exige `email_verified = true`: si el usuario existe y la contraseña es correcta pero la cuenta no ha verificado su correo, el login se rechaza con `403 EMAIL_NOT_VERIFIED` (ver `internal/services/user_service.go`, `ErrEmailNotVerified`). El registro genera un código de verificación que debe usarse para marcar `email_verified = true` antes de poder iniciar sesión.
 
 Durante el registro se genera un código numérico:
 
@@ -718,6 +731,7 @@ Tras hacer logout    → 401 Unauthorized (aunque el TTL no haya vencido)
 | `GET`   | `/api/v1/users/me`                 | Obtener datos del usuario autenticado | Sesión        |
 | `POST`  | `/api/v1/users/logout`             | Cerrar sesión                        | Sesión         |
 | `PATCH` | `/api/v1/users/email`              | Cambiar el correo del usuario        | Sesión         |
+| `PATCH` | `/api/v1/users/username`           | Cambiar el nombre de usuario         | Sesión         |
 | `PATCH` | `/api/v1/users/password`           | Cambiar la contraseña del usuario    | Sesión         |
 
 ---
@@ -811,6 +825,90 @@ Al cambiar el correo, la cuenta queda como **no verificada** nuevamente (`email_
 | 400         | `INVALID_REQUEST`     | JSON mal formado                                                       |
 | 400         | `VALIDATION_ERROR`    | `new_email` no es un email válido o falta `password`                    |
 | 400         | `EMAIL_UPDATE_FAILED` | Contraseña incorrecta, email igual al actual, o email ya registrado    |
+
+---
+
+# 17.1 Cambio de nombre de usuario
+
+Permite a un usuario autenticado actualizar su nombre de usuario (`username`).
+
+### Handler y ruta
+
+```go
+protected.PATCH("/username", usersHandler.UpdateUsername)
+```
+
+```text
+PATCH /api/v1/users/username
+```
+
+Requiere autenticación:
+
+```http
+Authorization: Bearer <token>
+```
+
+### DTO
+
+```go
+type UpdateUsernameRequest struct {
+    NewUsername string `json:"new_username" validate:"required,min=2,max=50"`
+}
+```
+
+### Body
+
+```json
+{
+    "new_username": "natalia_nueva"
+}
+```
+
+### Flujo (`UserService.UpdateUsername`)
+
+```text
+PATCH /api/v1/users/username
+          │
+          ▼
+   AuthMiddleware (extrae userID de la sesión)
+          │
+          ▼
+    UpdateUsernameRequest
+          │
+          ▼
+   UserService.UpdateUsername()
+          │
+          ├── Buscar usuario por ID
+          │
+          ├── Rechazar si new_username == username actual
+          │
+          └── Actualizar username
+                    │
+                    ▼
+              Respuesta HTTP
+```
+
+Nota: al igual que en el registro, esta operación no valida unicidad del `username` a nivel de aplicación ni de base de datos (no existe un índice único sobre esa columna).
+
+### Respuesta exitosa
+
+```json
+{
+    "id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    "username": "natalia_nueva",
+    "email": "natalia@gmail.com",
+    "created_at": "2026-08-08T..."
+}
+```
+
+### Posibles errores
+
+| Código HTTP | Code                     | Causa                                                    |
+| ----------- | ------------------------ | --------------------------------------------------------- |
+| 401         | `UNAUTHORIZED`           | Falta el token o es inválido/expirado                    |
+| 400         | `INVALID_REQUEST`        | JSON mal formado                                          |
+| 400         | `VALIDATION_ERROR`       | `new_username` vacío o fuera del rango de 2 a 50 caracteres |
+| 400         | `USERNAME_UPDATE_FAILED` | `new_username` igual al actual, o usuario no encontrado  |
 
 ---
 
